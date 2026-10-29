@@ -1,0 +1,27 @@
+[package]
+name = "shared-map"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+dioxus = { workspace = true, features = ["launch", "lib", "logger"] }
+oauth2 = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
+webbrowser = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { workspace = true }
+
+[build-dependencies]
+serde_json = { workspace = true }
+
+# macOS는 desktop, Android는 mobile 렌더러를 쓴다. 둘은 상호 배타적이므로 함께 켜지 않는다.
+[features]
+default = ["desktop"]
+desktop = ["dioxus/desktop"]
+mobile = ["dioxus/mobile"]

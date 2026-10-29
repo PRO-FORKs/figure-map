@@ -1,1 +1,5 @@
 /target
+
+# Google OAuth client 파일. 빌드 시 바이너리에 포함되며 저장소에는 올리지 않는다.
+/secrets/
+client_secret_*.json
