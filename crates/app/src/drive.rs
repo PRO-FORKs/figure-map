@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::DriveToken;
@@ -29,23 +30,23 @@ pub struct Project {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DriveError {
-    #[error("로그인이 만료됐어. 다시 로그인해")]
+    #[error("{}", t!("drive_error.unauthorized"))]
     Unauthorized,
-    #[error("Drive 접근이 거부됐어 (HTTP {0})")]
+    #[error("{}", t!("drive_error.forbidden", status = .0))]
     Forbidden(u16),
-    #[error("Drive 요청이 많거나 일시적으로 실패했어 (HTTP {0}). 잠시 후 다시 시도해")]
+    #[error("{}", t!("drive_error.unavailable", status = .0))]
     Unavailable(u16),
-    #[error("Drive 요청 실패 (HTTP {0})")]
+    #[error("{}", t!("drive_error.rejected", status = .0))]
     Rejected(u16),
-    #[error("네트워크 오류: {0}")]
+    #[error("{}", t!("error.network", reason = .0))]
     Network(String),
     #[error("{0}")]
     InvalidInput(String),
-    #[error("이미 있는 프로젝트 ID야: {0}")]
+    #[error("{}", t!("drive_error.project_exists", id = .0))]
     ProjectExists(String),
-    #[error("{PROJECTS_FILE} 형식이 잘못됐어: {0}")]
+    #[error("{}", t!("drive_error.invalid_projects", file = PROJECTS_FILE, reason = .0))]
     InvalidProjects(String),
-    #[error("내부 오류: {0}")]
+    #[error("{}", t!("error.internal", reason = .0))]
     Internal(String),
 }
 
@@ -127,26 +128,26 @@ pub fn validate_new_project<'a>(
     let project_id = project_id.trim();
     let alias = alias.trim();
     if project_id.is_empty() || project_id.len() > MAX_PROJECT_ID_LEN {
-        return Err(DriveError::InvalidInput(format!(
-            "프로젝트 ID는 1~{MAX_PROJECT_ID_LEN}자여야 해"
-        )));
+        return Err(DriveError::InvalidInput(
+            t!("drive_error.project_id_length", max = MAX_PROJECT_ID_LEN).into_owned(),
+        ));
     }
     if !project_id
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
         return Err(DriveError::InvalidInput(
-            "프로젝트 ID는 영문, 숫자, -, _만 쓸 수 있어".to_owned(),
+            t!("drive_error.project_id_chars").into_owned(),
         ));
     }
     if alias.is_empty() || alias.chars().count() > MAX_ALIAS_CHARS {
-        return Err(DriveError::InvalidInput(format!(
-            "별명은 1~{MAX_ALIAS_CHARS}자여야 해"
-        )));
+        return Err(DriveError::InvalidInput(
+            t!("drive_error.alias_length", max = MAX_ALIAS_CHARS).into_owned(),
+        ));
     }
     if alias.chars().any(char::is_control) {
         return Err(DriveError::InvalidInput(
-            "별명에 탭이나 줄바꿈은 쓸 수 없어".to_owned(),
+            t!("drive_error.alias_control_chars").into_owned(),
         ));
     }
     Ok((project_id, alias))
@@ -209,7 +210,7 @@ async fn find_first(
     let list: FileList = check_status(response)?
         .json()
         .await
-        .map_err(|e| DriveError::Internal(format!("files.list 응답 해석 실패: {e}")))?;
+        .map_err(|e| DriveError::Internal(response_parse_error("files.list", e)))?;
     list.files
         .into_iter()
         .next()
@@ -227,7 +228,7 @@ fn checked_id(id: String) -> Result<String, DriveError> {
         Ok(id)
     } else {
         Err(DriveError::Internal(
-            "예상하지 못한 Drive 파일 ID 형식".to_owned(),
+            t!("drive_error.unexpected_file_id").into_owned(),
         ))
     }
 }
@@ -264,7 +265,7 @@ async fn create_file(
     let entry: FileEntry = check_status(response)?
         .json()
         .await
-        .map_err(|e| DriveError::Internal(format!("files.create 응답 해석 실패: {e}")))?;
+        .map_err(|e| DriveError::Internal(response_parse_error("files.create", e)))?;
     checked_id(entry.id)
 }
 
@@ -307,11 +308,14 @@ async fn download_text(
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(network)? {
         if bytes.len() + chunk.len() > MAX_PROJECTS_BYTES {
-            return Err(DriveError::InvalidProjects("파일이 너무 커".to_owned()));
+            return Err(DriveError::InvalidProjects(
+                t!("drive_error.projects_too_large").into_owned(),
+            ));
         }
         bytes.extend_from_slice(&chunk);
     }
-    String::from_utf8(bytes).map_err(|_| DriveError::InvalidProjects("UTF-8이 아니야".to_owned()))
+    String::from_utf8(bytes)
+        .map_err(|_| DriveError::InvalidProjects(t!("drive_error.projects_not_utf8").into_owned()))
 }
 
 fn check_status(response: reqwest::Response) -> Result<reqwest::Response, DriveError> {
@@ -326,6 +330,10 @@ fn check_status(response: reqwest::Response) -> Result<reqwest::Response, DriveE
         429 | 500..=599 => DriveError::Unavailable(code),
         _ => DriveError::Rejected(code),
     })
+}
+
+fn response_parse_error(api: &str, e: reqwest::Error) -> String {
+    t!("drive_error.response_parse", api = api, reason = e).into_owned()
 }
 
 fn network(e: reqwest::Error) -> DriveError {
@@ -344,10 +352,13 @@ fn parse_projects(text: &str) -> Result<Vec<Project>, DriveError> {
         return Ok(Vec::new());
     };
     if header.split('\t').map(str::trim).ne(PROJECTS_HEADER) {
-        return Err(DriveError::InvalidProjects(format!(
-            "헤더는 {}여야 해",
-            PROJECTS_HEADER.join(", ")
-        )));
+        return Err(DriveError::InvalidProjects(
+            t!(
+                "drive_error.projects_bad_header",
+                header = PROJECTS_HEADER.join(", ")
+            )
+            .into_owned(),
+        ));
     }
 
     lines
@@ -359,10 +370,9 @@ fn parse_projects(text: &str) -> Result<Vec<Project>, DriveError> {
                     owner: (*owner).to_owned(),
                     drive_root: (*drive_root).to_owned(),
                 }),
-                _ => Err(DriveError::InvalidProjects(format!(
-                    "{}번째 줄의 컬럼이 맞지 않아",
-                    index + 1
-                ))),
+                _ => Err(DriveError::InvalidProjects(
+                    t!("drive_error.projects_bad_row", line = index + 1).into_owned(),
+                )),
             }
         })
         .collect()
@@ -468,5 +478,18 @@ mod tests {
                 "{id:?} {alias:?}"
             );
         }
+    }
+
+    // 키가 없으면 t!는 키 문자열을 그대로 돌려주므로 실제 문구로 풀리는지 확인한다.
+    #[test]
+    fn error_messages_resolve_from_locale() {
+        assert_eq!(
+            DriveError::Forbidden(403).to_string(),
+            "Drive 접근이 거부됐어 (HTTP 403)"
+        );
+        assert_eq!(
+            DriveError::InvalidProjects("x".to_owned()).to_string(),
+            "projects.tsv 형식이 잘못됐어: x"
+        );
     }
 }

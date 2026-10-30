@@ -3,9 +3,13 @@ mod drive;
 mod token_store;
 
 use dioxus::prelude::*;
+use rust_i18n::t;
+
+rust_i18n::i18n!("locales", fallback = "ko-KR");
 
 fn main() {
-    dioxus::launch(App);
+    rust_i18n::set_locale("ko-KR");
+    launch(App);
 }
 
 #[derive(Clone, PartialEq)]
@@ -54,23 +58,23 @@ fn App() -> Element {
         main {
             match state() {
                 LoginState::SignedIn(session) => rsx! {
-                    p { "로그인한 계정: {session.account.email}" }
-                    button { onclick: sign_out, "로그아웃" }
+                    p { {t!("login.signed_in_as", email = session.account.email).to_string()} }
+                    button { onclick: sign_out, {t!("login.sign_out").to_string()} }
                     Projects { token: session.drive_token, owner: session.account.email }
                 },
                 LoginState::Restoring => rsx! {
-                    p { "로그인 정보를 확인하는 중..." }
+                    p { {t!("login.restoring").to_string()} }
                 },
                 LoginState::InProgress => rsx! {
-                    p { "브라우저에서 로그인을 마쳐 줘." }
-                    button { disabled: true, "Google로 로그인" }
+                    p { {t!("login.finish_in_browser").to_string()} }
+                    button { disabled: true, {t!("login.with_google").to_string()} }
                 },
                 LoginState::SignedOut => rsx! {
-                    button { onclick: sign_in, "Google로 로그인" }
+                    button { onclick: sign_in, {t!("login.with_google").to_string()} }
                 },
                 LoginState::Failed(message) => rsx! {
-                    p { "로그인 실패: {message}" }
-                    button { onclick: sign_in, "다시 시도" }
+                    p { {t!("login.failed", message = message).to_string()} }
+                    button { onclick: sign_in, {t!("common.retry").to_string()} }
                 },
             }
         }
@@ -99,23 +103,23 @@ fn Projects(token: auth::DriveToken, owner: String) -> Element {
                 },
             }
         } else {
-            button { onclick: move |_| form_open.set(true), "프로젝트 생성" }
+            button { onclick: move |_| form_open.set(true), {t!("project.create").to_string()} }
         }
         match &*projects.read() {
             None => rsx! {
-                p { "프로젝트 목록을 불러오는 중..." }
+                p { {t!("project.loading").to_string()} }
             },
             Some(Ok(list)) if list.is_empty() => rsx! {},
             Some(Ok(list)) => rsx! {
                 ul {
                     for project in list {
-                        li { key: "{project.drive_root}", "{project.alias} ({project.owner})" }
+                        li { key: "{project.drive_root}", {t!("project.list_item", alias = project.alias, owner = project.owner).to_string()} }
                     }
                 }
             },
             Some(Err(e)) => rsx! {
-                p { "프로젝트 목록을 불러오지 못했어: {e}" }
-                button { onclick: move |_| projects.restart(), "다시 시도" }
+                p { {t!("project.load_failed", message = e).to_string()} }
+                button { onclick: move |_| projects.restart(), {t!("common.retry").to_string()} }
             },
         }
     }
@@ -159,35 +163,35 @@ fn CreateProjectForm(
     rsx! {
         form { onsubmit: submit,
             label {
-                "프로젝트 ID "
+                {t!("project.id_label").to_string()}
                 input {
                     value: "{project_id}",
-                    placeholder: "dongmyo-2026",
+                    placeholder: t!("project.id_placeholder").to_string(),
                     disabled: submitting(),
                     oninput: move |e| project_id.set(e.value()),
                 }
             }
             label {
-                "별명 "
+                {t!("project.alias_label").to_string()}
                 input {
                     value: "{alias}",
-                    placeholder: "동묘 투어",
+                    placeholder: t!("project.alias_placeholder").to_string(),
                     disabled: submitting(),
                     oninput: move |e| alias.set(e.value()),
                 }
             }
-            button { r#type: "submit", disabled: submitting(), "생성" }
+            button { r#type: "submit", disabled: submitting(), {t!("project.submit").to_string()} }
             button {
                 r#type: "button",
                 disabled: submitting(),
                 onclick: move |_| on_close.call(false),
-                "취소"
+                {t!("common.cancel").to_string()}
             }
             if submitting() {
-                p { "프로젝트를 만드는 중..." }
+                p { {t!("project.creating").to_string()} }
             }
             if let Some(message) = error() {
-                p { "프로젝트를 만들지 못했어: {message}" }
+                p { {t!("project.create_failed", message = message).to_string()} }
             }
         }
     }

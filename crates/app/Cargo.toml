@@ -8,6 +8,7 @@ rust-version.workspace = true
 dioxus = { workspace = true, features = ["launch", "lib", "logger"] }
 oauth2 = { workspace = true }
 reqwest = { workspace = true }
+rust-i18n = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

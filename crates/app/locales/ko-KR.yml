@@ -1,0 +1,64 @@
+_version: 1
+
+login:
+  signed_in_as: "로그인한 계정: %{email}"
+  sign_out: "로그아웃"
+  restoring: "로그인 정보를 확인하는 중..."
+  finish_in_browser: "브라우저에서 로그인을 마쳐 줘."
+  with_google: "Google로 로그인"
+  failed: "로그인 실패: %{message}"
+  callback_done: "로그인 처리가 끝났어. 앱으로 돌아가."
+
+common:
+  retry: "다시 시도"
+  cancel: "취소"
+
+project:
+  create: "프로젝트 생성"
+  loading: "프로젝트 목록을 불러오는 중..."
+  list_item: "%{alias} (%{owner})"
+  load_failed: "프로젝트 목록을 불러오지 못했어: %{message}"
+  id_label: "프로젝트 ID "
+  id_placeholder: "akiba-2026"
+  alias_label: "별명 "
+  alias_placeholder: "피규어 정찰"
+  submit: "생성"
+  creating: "프로젝트를 만드는 중..."
+  create_failed: "프로젝트를 만들지 못했어: %{message}"
+
+error:
+  network: "네트워크 오류: %{reason}"
+  internal: "내부 오류: %{reason}"
+
+auth_error:
+  denied: "로그인이 거부되었어 (%{reason})"
+  timed_out: "로그인 대기 시간이 지났어. 다시 시도해"
+  browser_unavailable: "브라우저를 열 수 없어: %{reason}"
+  drive_not_granted: "Google Drive 접근 권한이 허용되지 않았어. 동의 화면에서 Drive 항목을 체크하고 다시 로그인해"
+  rejected: "Google이 요청을 거절했어: %{reason}"
+  loopback_bind: "loopback 바인드 실패: %{reason}"
+  loopback_accept: "loopback 연결 수락 실패: %{reason}"
+  userinfo_parse: "userinfo 응답 해석 실패: %{reason}"
+  email_unverified: "확인된 이메일이 없는 계정이야"
+
+drive_error:
+  unauthorized: "로그인이 만료됐어. 다시 로그인해"
+  forbidden: "Drive 접근이 거부됐어 (HTTP %{status})"
+  unavailable: "Drive 요청이 많거나 일시적으로 실패했어 (HTTP %{status}). 잠시 후 다시 시도해"
+  rejected: "Drive 요청 실패 (HTTP %{status})"
+  project_exists: "이미 있는 프로젝트 ID야: %{id}"
+  invalid_projects: "%{file} 형식이 잘못됐어: %{reason}"
+  response_parse: "%{api} 응답 해석 실패: %{reason}"
+  unexpected_file_id: "예상하지 못한 Drive 파일 ID 형식"
+  project_id_length: "프로젝트 ID는 1~%{max}자여야 해"
+  project_id_chars: "프로젝트 ID는 영문, 숫자, -, _만 쓸 수 있어"
+  alias_length: "별명은 1~%{max}자여야 해"
+  alias_control_chars: "별명에 탭이나 줄바꿈은 쓸 수 없어"
+  projects_too_large: "파일이 너무 커"
+  projects_not_utf8: "UTF-8이 아니야"
+  projects_bad_header: "헤더는 %{header}여야 해"
+  projects_bad_row: "%{line}번째 줄의 컬럼이 맞지 않아"
+
+store_error:
+  message: "보안 저장소 오류: %{reason}"
+  not_utf8: "저장된 토큰이 UTF-8이 아니야"

@@ -8,6 +8,7 @@ use oauth2::{
     PkceCodeChallenge, RedirectUrl, RefreshToken, RequestTokenError, Scope, TokenResponse,
     TokenUrl,
 };
+use rust_i18n::t;
 use serde::Deserialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -60,29 +61,27 @@ pub struct Session {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
-    #[error("로그인이 거부되었어 ({0})")]
+    #[error("{}", t!("auth_error.denied", reason = .0))]
     Denied(String),
-    #[error("로그인 대기 시간이 지났어. 다시 시도해")]
+    #[error("{}", t!("auth_error.timed_out"))]
     TimedOut,
-    #[error("브라우저를 열 수 없어: {0}")]
+    #[error("{}", t!("auth_error.browser_unavailable", reason = .0))]
     BrowserUnavailable(#[source] std::io::Error),
-    #[error("네트워크 오류: {0}")]
+    #[error("{}", t!("error.network", reason = .0))]
     Network(String),
-    #[error(
-        "Google Drive 접근 권한이 허용되지 않았어. 동의 화면에서 Drive 항목을 체크하고 다시 로그인해"
-    )]
+    #[error("{}", t!("auth_error.drive_not_granted"))]
     DriveNotGranted,
-    #[error("Google이 요청을 거절했어: {0}")]
+    #[error("{}", t!("auth_error.rejected", reason = .0))]
     Rejected(String),
-    #[error("내부 오류: {0}")]
+    #[error("{}", t!("error.internal", reason = .0))]
     Internal(String),
 }
 
 pub async fn sign_in() -> Result<Session, AuthError> {
     // IPv6 전용 환경을 고려할 필요가 없으므로 127.0.0.1에 임의 포트로 바인드한다.
-    let listener = TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .map_err(|e| AuthError::Internal(format!("loopback 바인드 실패: {e}")))?;
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| {
+        AuthError::Internal(t!("auth_error.loopback_bind", reason = e).into_owned())
+    })?;
     let port = listener
         .local_addr()
         .map_err(|e| AuthError::Internal(e.to_string()))?
@@ -204,23 +203,25 @@ async fn session_from(http: &reqwest::Client, access_token: &str) -> Result<Sess
 
 async fn receive_code(listener: &TcpListener, expected_state: &str) -> Result<String, AuthError> {
     loop {
-        let (mut stream, _) = listener
-            .accept()
-            .await
-            .map_err(|e| AuthError::Internal(format!("loopback 연결 수락 실패: {e}")))?;
+        let (mut stream, _) = listener.accept().await.map_err(|e| {
+            AuthError::Internal(t!("auth_error.loopback_accept", reason = e).into_owned())
+        })?;
 
         let Some(target) = read_request_target(&mut stream).await else {
             continue;
         };
         let callback = parse_callback(&target);
         let (status, body) = match &callback {
-            Callback::Ignored => ("404 Not Found", ""),
+            Callback::Ignored => ("404 Not Found", String::new()),
             Callback::Code { .. } | Callback::Error(_) => (
                 "200 OK",
-                "<html><body><p>로그인 처리가 끝났어. 앱으로 돌아가.</p></body></html>",
+                format!(
+                    "<html><body><p>{}</p></body></html>",
+                    t!("login.callback_done")
+                ),
             ),
         };
-        respond(&mut stream, status, body).await;
+        respond(&mut stream, status, &body).await;
 
         match callback {
             Callback::Ignored => continue,
@@ -315,14 +316,13 @@ async fn fetch_email(
     if !status.is_success() {
         return Err(AuthError::Rejected(format!("userinfo HTTP {status}")));
     }
-    let info: UserInfo = response
-        .json()
-        .await
-        .map_err(|e| AuthError::Internal(format!("userinfo 응답 해석 실패: {e}")))?;
+    let info: UserInfo = response.json().await.map_err(|e| {
+        AuthError::Internal(t!("auth_error.userinfo_parse", reason = e).into_owned())
+    })?;
     match (info.email, info.email_verified) {
         (Some(email), Some(true)) => Ok(GoogleAccount { email }),
         _ => Err(AuthError::Rejected(
-            "확인된 이메일이 없는 계정이야".to_owned(),
+            t!("auth_error.email_unverified").into_owned(),
         )),
     }
 }

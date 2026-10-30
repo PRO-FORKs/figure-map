@@ -1,8 +1,10 @@
 //! Google refresh token 보관소. macOS는 Keychain을 쓴다.
 //! Android 보안 저장소는 아직 연결하지 않아 저장하지 않는다(매번 로그인).
 
+use rust_i18n::t;
+
 #[derive(Debug, thiserror::Error)]
-#[error("보안 저장소 오류: {0}")]
+#[error("{}", t!("store_error.message", reason = .0))]
 pub struct StoreError(String);
 
 #[cfg(target_os = "macos")]
@@ -10,6 +12,8 @@ mod imp {
     use security_framework::passwords::{
         delete_generic_password, get_generic_password, set_generic_password,
     };
+
+    use rust_i18n::t;
 
     use super::StoreError;
 
@@ -22,7 +26,7 @@ mod imp {
         match get_generic_password(SERVICE, ACCOUNT) {
             Ok(bytes) => String::from_utf8(bytes)
                 .map(Some)
-                .map_err(|_| StoreError("저장된 토큰이 UTF-8이 아니야".to_owned())),
+                .map_err(|_| StoreError(t!("store_error.not_utf8").into_owned())),
             Err(e) if e.code() == ITEM_NOT_FOUND => Ok(None),
             Err(e) => Err(StoreError(e.to_string())),
         }
