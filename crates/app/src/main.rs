@@ -1,5 +1,6 @@
 mod auth;
 mod drive;
+mod map;
 mod token_store;
 
 use dioxus::prelude::*;
@@ -89,6 +90,7 @@ fn Projects(token: auth::DriveToken, owner: String) -> Element {
         async move { drive::list_projects(&token).await }
     });
     let mut form_open = use_signal(|| false);
+    let mut selected = use_signal(|| None::<String>);
 
     rsx! {
         if form_open() {
@@ -113,8 +115,21 @@ fn Projects(token: auth::DriveToken, owner: String) -> Element {
             Some(Ok(list)) => rsx! {
                 ul {
                     for project in list {
-                        li { key: "{project.drive_root}", {t!("project.list_item", alias = project.alias, owner = project.owner).to_string()} }
+                        li { key: "{project.drive_root}",
+                            button {
+                                r#type: "button",
+                                aria_pressed: selected().as_ref() == Some(&project.drive_root),
+                                onclick: {
+                                    let drive_root = project.drive_root.clone();
+                                    move |_| selected.set(Some(drive_root.clone()))
+                                },
+                                {t!("project.list_item", alias = project.alias, id = project.id).to_string()}
+                            }
+                        }
                     }
+                }
+                if let Some(drive_root) = selected() {
+                    map::CurrentLocationMap { key: "{drive_root}" }
                 }
             },
             Some(Err(e)) => rsx! {

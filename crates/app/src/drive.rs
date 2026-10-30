@@ -11,7 +11,9 @@ const FILES_URL: &str = "https://www.googleapis.com/drive/v3/files";
 const UPLOAD_URL: &str = "https://www.googleapis.com/upload/drive/v3/files";
 const APP_FOLDER: &str = "jipark-map";
 const PROJECTS_FILE: &str = "projects.tsv";
-const PROJECTS_HEADER: [&str; 3] = ["alias", "owner", "drive_root"];
+const PROJECTS_HEADER: [&str; 4] = ["id", "alias", "owner", "drive_root"];
+// id 컬럼 추가 전 형식. 읽을 때 폴더 이름으로 id를 채우고, 다음 저장 때 새 형식으로 바뀐다.
+const LEGACY_PROJECTS_HEADER: [&str; 3] = ["alias", "owner", "drive_root"];
 const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 const TSV_MIME: &str = "text/tab-separated-values";
 
@@ -23,6 +25,7 @@ const MAX_PROJECTS_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
+    pub id: String,
     pub alias: String,
     pub owner: String,
     pub drive_root: String,
@@ -60,8 +63,8 @@ pub async fn list_projects(token: &DriveToken) -> Result<Vec<Project>, DriveErro
         return Ok(Vec::new());
     };
 
-    let text = download_text(&http, token, &file_id).await?;
-    parse_projects(&text)
+    let rows = parse_projects(&download_text(&http, token, &file_id).await?)?;
+    resolve_ids(&http, token, rows).await
 }
 
 /// `jipark-map/{project_id}/` 폴더를 만들고 `projects.tsv`에 추가한다.
@@ -83,7 +86,10 @@ pub async fn create_project(
 
     let projects_file = find_first(&http, token, &projects_file_query(&app_folder)).await?;
     let mut projects = match &projects_file {
-        Some(file_id) => parse_projects(&download_text(&http, token, file_id).await?)?,
+        Some(file_id) => {
+            let rows = parse_projects(&download_text(&http, token, file_id).await?)?;
+            resolve_ids(&http, token, rows).await?
+        }
         None => Vec::new(),
     };
 
@@ -99,6 +105,7 @@ pub async fn create_project(
     };
 
     let project = Project {
+        id: project_id.to_owned(),
         alias: alias.to_owned(),
         owner: owner.to_owned(),
         drive_root,
@@ -178,6 +185,11 @@ struct FileList {
 #[derive(Deserialize)]
 struct FileEntry {
     id: String,
+}
+
+#[derive(Deserialize)]
+struct FileName {
+    name: String,
 }
 
 #[derive(Serialize)]
@@ -340,7 +352,27 @@ fn network(e: reqwest::Error) -> DriveError {
     DriveError::Network(e.without_url().to_string())
 }
 
-fn parse_projects(text: &str) -> Result<Vec<Project>, DriveError> {
+/// `projects.tsv`의 한 줄. 구 형식 파일에서 읽은 줄은 `id`가 없다.
+#[derive(Debug, PartialEq, Eq)]
+struct ProjectRow {
+    id: Option<String>,
+    alias: String,
+    owner: String,
+    drive_root: String,
+}
+
+impl ProjectRow {
+    fn with_id(self, id: String) -> Project {
+        Project {
+            id,
+            alias: self.alias,
+            owner: self.owner,
+            drive_root: self.drive_root,
+        }
+    }
+}
+
+fn parse_projects(text: &str) -> Result<Vec<ProjectRow>, DriveError> {
     let mut lines = text
         .strip_prefix('\u{feff}')
         .unwrap_or(text)
@@ -351,7 +383,11 @@ fn parse_projects(text: &str) -> Result<Vec<Project>, DriveError> {
     let Some((_, header)) = lines.next() else {
         return Ok(Vec::new());
     };
-    if header.split('\t').map(str::trim).ne(PROJECTS_HEADER) {
+    let legacy = if header.split('\t').map(str::trim).eq(PROJECTS_HEADER) {
+        false
+    } else if header.split('\t').map(str::trim).eq(LEGACY_PROJECTS_HEADER) {
+        true
+    } else {
         return Err(DriveError::InvalidProjects(
             t!(
                 "drive_error.projects_bad_header",
@@ -359,30 +395,81 @@ fn parse_projects(text: &str) -> Result<Vec<Project>, DriveError> {
             )
             .into_owned(),
         ));
-    }
+    };
 
     lines
         .map(|(index, line)| {
             let fields: Vec<&str> = line.split('\t').map(str::trim).collect();
-            match fields.as_slice() {
-                [alias, owner, drive_root] if fields.iter().all(|f| !f.is_empty()) => Ok(Project {
-                    alias: (*alias).to_owned(),
-                    owner: (*owner).to_owned(),
-                    drive_root: (*drive_root).to_owned(),
-                }),
-                _ => Err(DriveError::InvalidProjects(
-                    t!("drive_error.projects_bad_row", line = index + 1).into_owned(),
-                )),
+            let row = |id: Option<&str>, alias: &str, owner: &str, drive_root: &str| ProjectRow {
+                id: id.map(str::to_owned),
+                alias: alias.to_owned(),
+                owner: owner.to_owned(),
+                drive_root: drive_root.to_owned(),
+            };
+            match (legacy, fields.as_slice()) {
+                _ if fields.iter().any(|f| f.is_empty()) => None,
+                (false, [id, alias, owner, drive_root]) => {
+                    Some(row(Some(id), alias, owner, drive_root))
+                }
+                (true, [alias, owner, drive_root]) => Some(row(None, alias, owner, drive_root)),
+                _ => None,
             }
+            .ok_or_else(|| {
+                DriveError::InvalidProjects(
+                    t!("drive_error.projects_bad_row", line = index + 1).into_owned(),
+                )
+            })
         })
         .collect()
+}
+
+/// 구 형식 줄의 id를 프로젝트 폴더 이름으로 채운다. 폴더 이름은 생성 시 프로젝트 ID와 같다.
+async fn resolve_ids(
+    http: &reqwest::Client,
+    token: &DriveToken,
+    rows: Vec<ProjectRow>,
+) -> Result<Vec<Project>, DriveError> {
+    let mut projects = Vec::with_capacity(rows.len());
+    for row in rows {
+        let id = match row.id.clone() {
+            Some(id) => id,
+            None => folder_name(http, token, &row.drive_root).await?,
+        };
+        projects.push(row.with_id(id));
+    }
+    Ok(projects)
+}
+
+async fn folder_name(
+    http: &reqwest::Client,
+    token: &DriveToken,
+    folder_id: &str,
+) -> Result<String, DriveError> {
+    let response = http
+        .get(format!("{FILES_URL}/{}", checked_id(folder_id.to_owned())?))
+        .bearer_auth(token.secret())
+        .query(&[("fields", "name")])
+        .send()
+        .await
+        .map_err(network)?;
+    let file: FileName = check_status(response)?
+        .json()
+        .await
+        .map_err(|e| DriveError::Internal(response_parse_error("files.get", e)))?;
+    // 사용자가 Drive에서 폴더 이름을 바꿨을 수 있다. TSV를 깨뜨리는 값만 거른다.
+    if file.name.is_empty() || file.name.chars().any(char::is_control) {
+        return Err(DriveError::Internal(
+            t!("drive_error.unexpected_folder_name").into_owned(),
+        ));
+    }
+    Ok(file.name)
 }
 
 fn serialize_projects(projects: &[Project]) -> String {
     let mut text = PROJECTS_HEADER.join("\t");
     text.push('\n');
     for p in projects {
-        text.push_str(&[p.alias.as_str(), &p.owner, &p.drive_root].join("\t"));
+        text.push_str(&[p.id.as_str(), &p.alias, &p.owner, &p.drive_root].join("\t"));
         text.push('\n');
     }
     text
@@ -392,12 +479,22 @@ fn serialize_projects(projects: &[Project]) -> String {
 mod tests {
     use super::*;
 
+    fn project(id: &str, alias: &str, owner: &str, drive_root: &str) -> Project {
+        Project {
+            id: id.to_owned(),
+            alias: alias.to_owned(),
+            owner: owner.to_owned(),
+            drive_root: drive_root.to_owned(),
+        }
+    }
+
     #[test]
     fn parses_projects() {
-        let text = "alias\towner\tdrive_root\n동묘 투어\talice@example.com\t1AbC\n\n";
+        let text = "id\talias\towner\tdrive_root\ndongmyo\t동묘 투어\talice@example.com\t1AbC\n\n";
         assert_eq!(
             parse_projects(text).unwrap(),
-            vec![Project {
+            vec![ProjectRow {
+                id: Some("dongmyo".to_owned()),
                 alias: "동묘 투어".to_owned(),
                 owner: "alice@example.com".to_owned(),
                 drive_root: "1AbC".to_owned(),
@@ -406,12 +503,25 @@ mod tests {
     }
 
     #[test]
+    fn parses_legacy_projects_without_id() {
+        let text = "alias\towner\tdrive_root\n동묘 투어\talice@example.com\t1AbC\n";
+        let rows = parse_projects(text).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, None);
+        assert_eq!(rows[0].drive_root, "1AbC");
+        assert!(matches!(
+            parse_projects("alias\towner\tdrive_root\nid\ta\tb\tc\n"),
+            Err(DriveError::InvalidProjects(_))
+        ));
+    }
+
+    #[test]
     fn handles_bom_crlf_and_empty_file() {
-        let text = "\u{feff}alias\towner\tdrive_root\r\na\tb\tc\r\n";
+        let text = "\u{feff}id\talias\towner\tdrive_root\r\ni\ta\tb\tc\r\n";
         assert_eq!(parse_projects(text).unwrap().len(), 1);
         assert!(parse_projects("").unwrap().is_empty());
         assert!(
-            parse_projects("alias\towner\tdrive_root\n")
+            parse_projects("id\talias\towner\tdrive_root\n")
                 .unwrap()
                 .is_empty()
         );
@@ -419,38 +529,33 @@ mod tests {
 
     #[test]
     fn rejects_bad_header_or_row() {
-        assert!(matches!(
-            parse_projects("name\towner\tdrive_root\n"),
-            Err(DriveError::InvalidProjects(_))
-        ));
-        assert!(matches!(
-            parse_projects("alias\towner\tdrive_root\na\tb\n"),
-            Err(DriveError::InvalidProjects(_))
-        ));
-        assert!(matches!(
-            parse_projects("alias\towner\tdrive_root\na\t\tc\n"),
-            Err(DriveError::InvalidProjects(_))
-        ));
+        for text in [
+            "name\towner\tdrive_root\n",
+            "id\talias\towner\tdrive_root\ni\ta\tb\n",
+            "id\talias\towner\tdrive_root\ni\ta\t\tc\n",
+        ] {
+            assert!(
+                matches!(parse_projects(text), Err(DriveError::InvalidProjects(_))),
+                "{text:?}"
+            );
+        }
     }
 
     #[test]
     fn serialized_projects_round_trip() {
         let projects = vec![
-            Project {
-                alias: "동묘 투어".to_owned(),
-                owner: "alice@example.com".to_owned(),
-                drive_root: "1AbC".to_owned(),
-            },
-            Project {
-                alias: "황학동".to_owned(),
-                owner: "bob@example.com".to_owned(),
-                drive_root: "2XyZ".to_owned(),
-            },
+            project("dongmyo", "동묘 투어", "alice@example.com", "1AbC"),
+            project("hwanghak", "황학동", "bob@example.com", "2XyZ"),
         ];
-        assert_eq!(
-            parse_projects(&serialize_projects(&projects)).unwrap(),
-            projects
-        );
+        let parsed: Vec<Project> = parse_projects(&serialize_projects(&projects))
+            .unwrap()
+            .into_iter()
+            .map(|row| {
+                let id = row.id.clone().unwrap();
+                row.with_id(id)
+            })
+            .collect();
+        assert_eq!(parsed, projects);
         assert!(parse_projects(&serialize_projects(&[])).unwrap().is_empty());
     }
 

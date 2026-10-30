@@ -16,7 +16,7 @@ common:
 project:
   create: "프로젝트 생성"
   loading: "프로젝트 목록을 불러오는 중..."
-  list_item: "%{alias} (%{owner})"
+  list_item: "%{alias} (%{id})"
   load_failed: "프로젝트 목록을 불러오지 못했어: %{message}"
   id_label: "프로젝트 ID "
   id_placeholder: "akiba-2026"
@@ -25,6 +25,15 @@ project:
   submit: "생성"
   creating: "프로젝트를 만드는 중..."
   create_failed: "프로젝트를 만들지 못했어: %{message}"
+
+map:
+  no_api_key: "Google Maps API 키가 설정되지 않아 지도를 표시할 수 없어"
+  loading: "지도를 불러오는 중..."
+  locating: "현재 위치를 찾는 중..."
+  location_denied: "위치 권한이 없어 기본 위치를 보여줘"
+  location_failed: "현재 위치를 가져오지 못해 기본 위치를 보여줘"
+  load_failed: "지도를 불러오지 못했어"
+  auth_failed: "Google Maps API 키가 거부됐어. 키 설정과 사용 제한을 확인해"
 
 error:
   network: "네트워크 오류: %{reason}"
@@ -50,6 +59,7 @@ drive_error:
   invalid_projects: "%{file} 형식이 잘못됐어: %{reason}"
   response_parse: "%{api} 응답 해석 실패: %{reason}"
   unexpected_file_id: "예상하지 못한 Drive 파일 ID 형식"
+  unexpected_folder_name: "프로젝트 폴더 이름을 ID로 쓸 수 없어"
   project_id_length: "프로젝트 ID는 1~%{max}자여야 해"
   project_id_chars: "프로젝트 ID는 영문, 숫자, -, _만 쓸 수 있어"
   alias_length: "별명은 1~%{max}자여야 해"

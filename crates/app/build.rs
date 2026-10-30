@@ -4,8 +4,11 @@ use std::process::ExitCode;
 
 const PATH_ENV: &str = "GOOGLE_OAUTH_CLIENT_FILE";
 const DEFAULT_PATH: &str = "../../secrets/google_oauth_client.json";
+const MAPS_KEY_PATH_ENV: &str = "GOOGLE_MAPS_API_KEY_FILE";
+const MAPS_KEY_DEFAULT_PATH: &str = "../../secrets/google_maps_api_key.txt";
 
 fn main() -> ExitCode {
+    embed_maps_key();
     println!("cargo:rerun-if-env-changed={PATH_ENV}");
 
     let path = match env::var_os(PATH_ENV) {
@@ -29,6 +32,25 @@ fn main() -> ExitCode {
             );
             ExitCode::FAILURE
         }
+    }
+}
+
+/// 지도 키는 선택 사항이다. 없으면 앱이 지도 대신 안내 문구를 보여준다.
+fn embed_maps_key() {
+    println!("cargo:rerun-if-env-changed={MAPS_KEY_PATH_ENV}");
+    let path = match env::var_os(MAPS_KEY_PATH_ENV) {
+        Some(path) => PathBuf::from(path),
+        None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(MAPS_KEY_DEFAULT_PATH),
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    match std::fs::read_to_string(&path) {
+        Ok(key) if !key.trim().is_empty() => {
+            println!("cargo:rustc-env=GOOGLE_MAPS_API_KEY={}", key.trim());
+        }
+        _ => println!(
+            "cargo:warning=Google Maps API 키가 없다: {}. 지도 없이 빌드한다.",
+            path.display()
+        ),
     }
 }
 

@@ -18,14 +18,17 @@ UTF-8 TSV이며 첫 줄은 헤더다.
 
 | 컬럼 | 설명 |
 | --- | --- |
+| `id` | 프로젝트 ID. 생성 시 프로젝트 폴더 이름과 같다 |
 | `alias` | 프로젝트 별명. 화면 표시용 |
 | `owner` | 프로젝트 소유자 |
 | `drive_root` | 프로젝트 루트 폴더의 Drive 폴더 ID |
 
 ```
-alias	owner	drive_root
-동묘 투어	alice@example.com	1AbCdEfGhIjKlMnOpQrStUvWxYz
+id	alias	owner	drive_root
+dongmyo	동묘 투어	alice@example.com	1AbCdEfGhIjKlMnOpQrStUvWxYz
 ```
+
+`id` 컬럼이 없는 구 형식(`alias	owner	drive_root`)도 읽는다. 이때 `id`는 `drive_root` 폴더의 현재 이름으로 채우고, 다음에 목록을 저장할 때 새 형식으로 다시 쓴다.
 
 `drive_root`는 경로가 아닌 폴더 ID로 저장한다. 초대받은 프로젝트 폴더는 내 `jipark-map/` 아래에 있지 않고, 폴더 이름이 바뀌거나 같은 이름의 폴더가 생겨도 ID는 그대로이기 때문이다.
 
