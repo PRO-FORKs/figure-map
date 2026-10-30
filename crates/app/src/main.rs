@@ -1,5 +1,6 @@
 mod auth;
 mod drive;
+mod location;
 mod map;
 mod token_store;
 

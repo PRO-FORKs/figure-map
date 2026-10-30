@@ -30,8 +30,9 @@ map:
   no_api_key: "Google Maps API 키가 설정되지 않아 지도를 표시할 수 없어"
   loading: "지도를 불러오는 중..."
   locating: "현재 위치를 찾는 중..."
-  location_denied: "위치 권한이 없어 기본 위치를 보여줘"
-  location_failed: "현재 위치를 가져오지 못해 기본 위치를 보여줘"
+  my_location: "현재 위치로"
+  location_denied: "위치 권한이 거부됐어. 설정에서 이 앱의 위치 접근을 허용한 뒤 다시 시도해"
+  location_failed: "현재 위치를 가져오지 못했어"
   load_failed: "지도를 불러오지 못했어"
   auth_failed: "Google Maps API 키가 거부됐어. 키 설정과 사용 제한을 확인해"
 

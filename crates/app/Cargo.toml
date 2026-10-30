@@ -16,6 +16,9 @@ url = { workspace = true }
 webbrowser = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-core-location = { workspace = true }
+objc2-foundation = { workspace = true }
 security-framework = { workspace = true }
 
 [build-dependencies]

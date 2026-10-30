@@ -1,0 +1,3 @@
+# macOS는 .app 번들이 아닌 실행 파일에 위치 권한 대화상자를 띄우지 않아 cargo run을 번들로 감싼다.
+[target.'cfg(target_os = "macos")']
+runner = "scripts/macos-run.sh"

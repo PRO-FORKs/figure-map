@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>shared-map</string>
+	<key>CFBundleIdentifier</key>
+	<string>dev.sharedmap.app</string>
+	<key>CFBundleName</key>
+	<string>shared-map</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>NSLocationUsageDescription</key>
+	<string>지도를 현재 위치로 옮기는 데 사용해.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>지도를 현재 위치로 옮기는 데 사용해.</string>
+</dict>
+</plist>
