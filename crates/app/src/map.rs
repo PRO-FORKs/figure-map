@@ -1,6 +1,7 @@
 //! Google Maps 어댑터. webview 안에서 Maps JavaScript API를 띄운다.
 //! 플랫폼별 Maps SDK 연결 여부는 아직 정하지 않았다(AGENTS.md 미확정 사항).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use dioxus::document::Eval;
@@ -46,32 +47,93 @@ enum MapCommand {
     ClearDraft,
 }
 
+/// 같은 위경도의 매물을 하나로 묶은 핀.
 #[derive(Serialize)]
 struct ListingMarker {
-    id: String,
+    key: String,
+    ids: Vec<String>,
     lat: f64,
     lng: f64,
     title: String,
+    count: usize,
+    /// 묶음 안 사진 중 무작위로 고른 하나의 썸네일 data URL.
+    image: Option<String>,
 }
 
-impl From<&Listing> for ListingMarker {
-    fn from(listing: &Listing) -> Self {
-        let price = listing
-            .price
-            .as_ref()
-            .map(|p| t!("listing.price", amount = p.amount, currency = p.currency).to_string());
-        let title = [price, Some(listing.note.clone()).filter(|n| !n.is_empty())]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join(" · ");
+struct ListingGroup<'a> {
+    key: String,
+    lat: f64,
+    lng: f64,
+    listings: Vec<&'a Listing>,
+}
+
+impl ListingGroup<'_> {
+    fn photos(&self) -> impl Iterator<Item = &PhotoRef> {
+        self.listings.iter().flat_map(|l| &l.photos)
+    }
+
+    fn marker(&self, image: Option<String>) -> ListingMarker {
         ListingMarker {
-            id: listing.id.clone(),
-            lat: listing.lat,
-            lng: listing.lng,
-            title,
+            key: self.key.clone(),
+            ids: self.listings.iter().map(|l| l.id.clone()).collect(),
+            lat: self.lat,
+            lng: self.lng,
+            title: self
+                .listings
+                .iter()
+                .map(|l| listing_title(l))
+                .filter(|t| !t.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            count: self.listings.len(),
+            image,
         }
     }
+}
+
+/// 위경도가 정확히 같은 매물끼리 처음 나온 순서대로 묶는다.
+fn group_by_position(listings: &[Listing]) -> Vec<ListingGroup<'_>> {
+    let mut groups: Vec<ListingGroup> = Vec::new();
+    for listing in listings {
+        let key = format!("{:x}_{:x}", listing.lat.to_bits(), listing.lng.to_bits());
+        match groups.iter_mut().find(|g| g.key == key) {
+            Some(group) => group.listings.push(listing),
+            None => groups.push(ListingGroup {
+                key,
+                lat: listing.lat,
+                lng: listing.lng,
+                listings: vec![listing],
+            }),
+        }
+    }
+    groups
+}
+
+/// 표시용이라 암호학적 난수는 필요 없다. 새 의존성 없이 해시 시드로 고른다.
+fn random_index(len: usize) -> usize {
+    use std::hash::{BuildHasher, Hasher};
+    let random = std::hash::RandomState::new().build_hasher().finish();
+    usize::try_from(random % len.max(1) as u64).unwrap_or(0)
+}
+
+fn listing_title(listing: &Listing) -> String {
+    let price = listing
+        .price
+        .as_ref()
+        .map(|p| t!("listing.price", amount = p.amount, currency = p.currency).to_string());
+    [price, Some(listing.note.clone()).filter(|n| !n.is_empty())]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// 묶음별로 고른 핀 사진. 목록이 바뀌어도 고른 사진이 남아 있으면 그대로 써서 핀이 깜빡이지 않게 한다.
+#[derive(Clone, PartialEq)]
+struct MarkerImage {
+    photo_id: String,
+    /// 썸네일을 만드는 중이거나 실패했으면 None.
+    src: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Deserialize)]
@@ -84,7 +146,7 @@ enum MapEvent {
     LoadFailed,
     AuthFailed,
     Clicked { lat: f64, lng: f64 },
-    ListingClicked { id: String },
+    ListingClicked { ids: Vec<String> },
 }
 
 #[derive(Clone, PartialEq)]
@@ -134,7 +196,8 @@ pub fn CurrentLocationMap(project_root: String, owner: String, token: DriveToken
     let mut status = use_signal(|| MapStatus::Loading);
     let mut map = use_signal(|| None::<Eval>);
     let mut draft = use_signal(|| None::<LatLng>);
-    let mut selected = use_signal(|| None::<String>);
+    let mut selected = use_signal(|| None::<Vec<String>>);
+    let mut marker_images = use_signal(HashMap::<String, MarkerImage>::new);
     let mut listings = use_resource({
         let (project_root, owner) = (project_root.clone(), owner.clone());
         move || {
@@ -175,9 +238,51 @@ pub fn CurrentLocationMap(project_root: String, owner: String, token: DriveToken
         let (Some(eval), Some(Ok(list))) = (map(), &*listings.read()) else {
             return;
         };
-        let listings = list.iter().map(ListingMarker::from).collect();
+        let groups = group_by_position(list);
+        let mut missing = Vec::new();
+        let markers = {
+            let images = marker_images.read();
+            groups
+                .iter()
+                .map(|group| {
+                    let kept = images
+                        .get(&group.key)
+                        .filter(|image| group.photos().any(|p| p.id == image.photo_id));
+                    if kept.is_none() {
+                        let photos: Vec<_> = group.photos().collect();
+                        if !photos.is_empty() {
+                            let photo = photos[random_index(photos.len())].clone();
+                            missing.push((group.key.clone(), photo));
+                        }
+                    }
+                    group.marker(kept.and_then(|image| image.src.clone()))
+                })
+                .collect()
+        };
         // 지도 스크립트가 끝난 뒤라면 다시 열 때 새로 그리므로 무시한다.
-        let _ = eval.send(MapCommand::ShowListings { listings });
+        let _ = eval.send(MapCommand::ShowListings { listings: markers });
+        for (key, photo) in missing {
+            // 썸네일을 만드는 동안 다시 실행돼도 같은 묶음을 중복으로 고르지 않게 먼저 기록한다.
+            marker_images.write().insert(
+                key.clone(),
+                MarkerImage {
+                    photo_id: photo.id.clone(),
+                    src: None,
+                },
+            );
+            spawn(async move {
+                let src = photo::thumbnail_from_file(photo.local_path, photo.kind)
+                    .await
+                    .ok();
+                if let Some(image) = marker_images
+                    .write()
+                    .get_mut(&key)
+                    .filter(|image| image.photo_id == photo.id)
+                {
+                    image.src = src;
+                }
+            });
+        }
     });
 
     let start = move |_| {
@@ -199,7 +304,7 @@ pub fn CurrentLocationMap(project_root: String, owner: String, token: DriveToken
                         locate(eval, status);
                     }
                     MapEvent::Clicked { lat, lng } => draft.set(Some(LatLng { lat, lng })),
-                    MapEvent::ListingClicked { id } => selected.set(Some(id)),
+                    MapEvent::ListingClicked { ids } => selected.set(Some(ids)),
                     event => status.set(MapStatus::Event(event)),
                 }
             }
@@ -264,16 +369,26 @@ pub fn CurrentLocationMap(project_root: String, owner: String, token: DriveToken
             Some(Ok(list)) if list.is_empty() && map().is_some() => rsx! {
                 p { {t!("listing.tap_to_add").to_string()} }
             },
-            Some(Ok(list)) => match selected().and_then(|id| list.iter().find(|l| l.id == id)) {
-                Some(listing) => rsx! {
-                    ListingDetail {
-                        key: "{listing.id}",
-                        listing: listing.clone(),
-                        on_close: move |_| selected.set(None),
+            Some(Ok(list)) => {
+                let ids = selected().unwrap_or_default();
+                let shown: Vec<_> = list.iter().filter(|l| ids.contains(&l.id)).cloned().collect();
+                if shown.is_empty() {
+                    rsx! {}
+                } else {
+                    rsx! {
+                        section {
+                            for listing in shown {
+                                ListingDetail { key: "{listing.id}", listing }
+                            }
+                            button {
+                                r#type: "button",
+                                onclick: move |_| selected.set(None),
+                                {t!("common.close").to_string()}
+                            }
+                        }
                     }
-                },
-                None => rsx! {},
-            },
+                }
+            }
             _ => rsx! {},
         }
         div {
@@ -520,13 +635,13 @@ fn AddListingForm(
 }
 
 #[component]
-fn ListingDetail(listing: Listing, on_close: EventHandler<()>) -> Element {
+fn ListingDetail(listing: Listing) -> Element {
     let price = listing
         .price
         .as_ref()
         .map(|p| t!("listing.price", amount = p.amount, currency = p.currency).to_string());
     rsx! {
-        section {
+        article {
             if let Some(price) = price {
                 p { {price} }
             }
@@ -540,7 +655,6 @@ fn ListingDetail(listing: Listing, on_close: EventHandler<()>) -> Element {
                     }
                 }
             }
-            button { r#type: "button", onclick: move |_| on_close.call(()), {t!("common.close").to_string()} }
         }
     }
 }
@@ -566,5 +680,62 @@ fn PhotoThumbnail(photo: PhotoRef, index: usize) -> Element {
         Some(Err(e)) => rsx! {
             p { {t!("photo.load_failed", message = e.to_string()).to_string()} }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn listing(id: &str, lat: f64, lng: f64, photos: &[&str]) -> Listing {
+        Listing {
+            id: id.to_owned(),
+            owner: "owner".to_owned(),
+            lat,
+            lng,
+            price: None,
+            note: String::new(),
+            created_at_ms: 0,
+            photos: photos
+                .iter()
+                .map(|id| PhotoRef {
+                    id: (*id).to_owned(),
+                    kind: photo::PhotoKind::Jpeg,
+                    local_path: format!("{id}.jpg").into(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn groups_only_identical_positions_in_first_seen_order() {
+        let listings = [
+            listing("a", 37.5, 127.0, &["p1"]),
+            listing("b", 37.6, 127.0, &[]),
+            listing("c", 37.5, 127.0, &["p2", "p3"]),
+            listing("d", 37.500_000_1, 127.0, &[]),
+        ];
+        let groups = group_by_position(&listings);
+        let ids: Vec<Vec<&str>> = groups
+            .iter()
+            .map(|g| g.listings.iter().map(|l| l.id.as_str()).collect())
+            .collect();
+        assert_eq!(ids, [vec!["a", "c"], vec!["b"], vec!["d"]]);
+
+        let photos: Vec<_> = groups[0].photos().map(|p| p.id.as_str()).collect();
+        assert_eq!(photos, ["p1", "p2", "p3"]);
+
+        let marker = groups[0].marker(Some("data:".to_owned()));
+        assert_eq!(marker.count, 2);
+        assert_eq!(marker.ids, ["a", "c"]);
+        assert_eq!(marker.image.as_deref(), Some("data:"));
+    }
+
+    #[test]
+    fn random_index_stays_in_range() {
+        for len in 1..20 {
+            assert!(random_index(len) < len);
+        }
+        assert_eq!(random_index(0), 0);
     }
 }
