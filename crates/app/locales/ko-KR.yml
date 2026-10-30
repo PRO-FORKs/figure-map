@@ -12,6 +12,7 @@ login:
 common:
   retry: "다시 시도"
   cancel: "취소"
+  close: "닫기"
 
 project:
   create: "프로젝트 생성"
@@ -35,6 +36,60 @@ map:
   location_failed: "현재 위치를 가져오지 못했어"
   load_failed: "지도를 불러오지 못했어"
   auth_failed: "Google Maps API 키가 거부됐어. 키 설정과 사용 제한을 확인해"
+
+listing:
+  tap_to_add: "지도를 눌러 매물을 추가해"
+  position: "위치: %{lat}, %{lng}"
+  price_label: "가격 "
+  price_placeholder: "비워두면 가격 없음"
+  price: "%{amount} %{currency}"
+  note_label: "비고 "
+  note_placeholder: "상품명, 상태 등"
+  submit: "매물 추가"
+  saving: "저장하는 중..."
+  save_failed: "매물을 저장하지 못했어: %{message}"
+  load_failed: "매물 목록을 불러오지 못했어: %{message}"
+
+listing_error:
+  currency: "지원하지 않는 통화야"
+  price_format: "가격은 숫자만 입력해"
+  price_range: "가격이 허용 범위를 벗어났어"
+  position: "위치가 올바르지 않아"
+  note_length: "비고는 %{max}자 이하여야 해"
+  unsupported_schema: "지원하지 않는 매물 DB 스키마 버전이야: %{version}"
+  storage: "로컬 저장소 오류: %{reason}"
+
+sync:
+  pending: "Drive에 올리지 않은 변경이 있어"
+  pending_with_photos: "Drive에 올리지 않은 변경이 있어 (사진 %{count}장)"
+  running: "Drive에 올리는 중..."
+  uploaded: "Drive에 저장됨 · 마지막 업로드 %{ago}"
+  failed: "Drive 업로드 실패: %{message}. 기록은 이 기기에 남아 있어"
+  status_failed: "업로드 상태를 확인하지 못했어: %{message}"
+  upload_now: "지금 올리기"
+  ago_now: "방금"
+  ago_minutes: "%{count}분 전"
+  ago_hours: "%{count}시간 전"
+  ago_days: "%{count}일 전"
+
+sync_error:
+  photo_missing: "업로드할 사진 파일이 로컬에 없어: %{file}"
+
+photo:
+  attach_label: "사진 "
+  processing: "사진 %{count}장을 확인하는 중..."
+  alt: "사진 %{index}"
+  remove: "빼기"
+  loading: "사진을 불러오는 중..."
+  load_failed: "사진을 불러오지 못했어: %{message}"
+
+photo_error:
+  too_many: "사진은 매물당 %{max}장까지야"
+  too_large: "사진은 %{max_mb}MB 이하여야 해"
+  unsupported_format: "PNG, JPEG, GIF만 첨부할 수 있어"
+  undecodable: "이미지를 읽을 수 없어: %{reason}"
+  read_failed: "파일을 읽지 못했어: %{reason}"
+  attach_failed: "%{name} 첨부 실패: %{reason}"
 
 error:
   network: "네트워크 오류: %{reason}"

@@ -5,14 +5,20 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+base64 = { workspace = true }
 dioxus = { workspace = true, features = ["launch", "lib", "logger"] }
+image = { workspace = true }
 oauth2 = { workspace = true }
 reqwest = { workspace = true }
 rust-i18n = { workspace = true }
+rusqlite = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
+uuid = { workspace = true }
 webbrowser = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]

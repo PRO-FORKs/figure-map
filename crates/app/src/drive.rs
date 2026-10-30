@@ -10,17 +10,19 @@ use crate::auth::DriveToken;
 const FILES_URL: &str = "https://www.googleapis.com/drive/v3/files";
 const UPLOAD_URL: &str = "https://www.googleapis.com/upload/drive/v3/files";
 const APP_FOLDER: &str = "jipark-map";
-const PROJECTS_FILE: &str = "projects.tsv";
+const PROJECTS_FILE: &str = "projects.csv";
 const PROJECTS_HEADER: [&str; 4] = ["id", "alias", "owner", "drive_root"];
 // id 컬럼 추가 전 형식. 읽을 때 폴더 이름으로 id를 채우고, 다음 저장 때 새 형식으로 바뀐다.
 const LEGACY_PROJECTS_HEADER: [&str; 3] = ["alias", "owner", "drive_root"];
 const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
-const TSV_MIME: &str = "text/tab-separated-values";
+const CSV_MIME: &str = "text/tab-separated-values";
 
 const MAX_PROJECT_ID_LEN: usize = 64;
 const MAX_ALIAS_CHARS: usize = 100;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+// 사진은 20MB까지라 느린 모바일 회선에서 일반 요청 시간 제한으로는 부족하다.
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_PROJECTS_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,7 +55,7 @@ pub enum DriveError {
     Internal(String),
 }
 
-/// `jipark-map/projects.tsv`를 읽는다. 폴더나 파일이 아직 없으면 빈 목록이다.
+/// `jipark-map/projects.csv`를 읽는다. 폴더나 파일이 아직 없으면 빈 목록이다.
 pub async fn list_projects(token: &DriveToken) -> Result<Vec<Project>, DriveError> {
     let http = client()?;
     let Some(folder_id) = find_first(&http, token, &app_folder_query()).await? else {
@@ -67,7 +69,7 @@ pub async fn list_projects(token: &DriveToken) -> Result<Vec<Project>, DriveErro
     resolve_ids(&http, token, rows).await
 }
 
-/// `jipark-map/{project_id}/` 폴더를 만들고 `projects.tsv`에 추가한다.
+/// `jipark-map/{project_id}/` 폴더를 만들고 `projects.csv`에 추가한다.
 ///
 /// 폴더 생성 후 목록 갱신이 실패했다면 같은 ID로 다시 시도할 때 남은 폴더를 이어서 쓴다.
 pub async fn create_project(
@@ -114,17 +116,174 @@ pub async fn create_project(
 
     let file_id = match projects_file {
         Some(id) => id,
-        None => create_file(&http, token, PROJECTS_FILE, TSV_MIME, &app_folder).await?,
+        None => create_file(&http, token, PROJECTS_FILE, CSV_MIME, &app_folder).await?,
     };
     upload_text(
         &http,
         token,
         &file_id,
-        TSV_MIME,
+        CSV_MIME,
         serialize_projects(&projects),
     )
     .await?;
     Ok(project)
+}
+
+/// Drive에 올린 파일의 ID와 그 시점의 버전.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteFile {
+    pub id: String,
+    pub version: String,
+}
+
+/// 프로젝트 폴더 하나에 파일을 올린다. 요청마다 HTTP 클라이언트를 새로 만들지 않는다.
+pub struct FolderUploader {
+    http: reqwest::Client,
+    token: DriveToken,
+    folder_id: String,
+}
+
+impl FolderUploader {
+    pub fn new(token: &DriveToken, folder_id: &str) -> Result<Self, DriveError> {
+        Ok(Self {
+            http: client()?,
+            token: token.clone(),
+            folder_id: checked_id(folder_id.to_owned())?,
+        })
+    }
+
+    /// 같은 이름의 파일이 이미 있으면 다시 올리지 않고 그 파일을 쓴다.
+    /// 업로드 직후 종료돼 결과를 로컬에 기록하지 못했을 때 중복 파일을 만들지 않기 위해서다.
+    pub async fn upload_once(
+        &self,
+        name: &str,
+        mime_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<String, DriveError> {
+        if let Some(id) = self.find(name).await? {
+            return Ok(id);
+        }
+        Ok(self.create(name, mime_type, bytes).await?.id)
+    }
+
+    /// `file_id`가 가리키는 파일 내용을 바꾼다. ID가 없거나 파일이 사라졌으면 이름으로 찾거나 새로 만든다.
+    pub async fn replace(
+        &self,
+        file_id: Option<&str>,
+        name: &str,
+        mime_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<RemoteFile, DriveError> {
+        if let Some(id) = file_id {
+            match self.update(id, mime_type, bytes.clone()).await {
+                Err(DriveError::Rejected(404)) => {}
+                result => return result,
+            }
+        }
+        match self.find(name).await? {
+            Some(id) => self.update(&id, mime_type, bytes).await,
+            None => self.create(name, mime_type, bytes).await,
+        }
+    }
+
+    async fn find(&self, name: &str) -> Result<Option<String>, DriveError> {
+        let query = format!(
+            "name = '{}' and '{}' in parents and trashed = false",
+            escape_query(name),
+            self.folder_id
+        );
+        find_first(&self.http, &self.token, &query).await
+    }
+
+    async fn create(
+        &self,
+        name: &str,
+        mime_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<RemoteFile, DriveError> {
+        let metadata = serde_json::to_vec(&NewFile {
+            name,
+            mime_type,
+            parents: [&self.folder_id],
+        })
+        .map_err(|e| DriveError::Internal(e.to_string()))?;
+        let boundary = format!("shared-map-{}", uuid::Uuid::now_v7().simple());
+        let response = self
+            .http
+            .post(UPLOAD_URL)
+            .bearer_auth(self.token.secret())
+            .timeout(UPLOAD_TIMEOUT)
+            .query(&[("uploadType", "multipart"), ("fields", "id,version")])
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                format!("multipart/related; boundary={boundary}"),
+            )
+            .body(multipart_related(&boundary, &metadata, mime_type, &bytes))
+            .send()
+            .await
+            .map_err(network)?;
+        parse_remote_file(response, "files.create").await
+    }
+
+    async fn update(
+        &self,
+        file_id: &str,
+        mime_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<RemoteFile, DriveError> {
+        let response = self
+            .http
+            .patch(format!("{UPLOAD_URL}/{}", checked_id(file_id.to_owned())?))
+            .bearer_auth(self.token.secret())
+            .timeout(UPLOAD_TIMEOUT)
+            .query(&[("uploadType", "media"), ("fields", "id,version")])
+            .header(reqwest::header::CONTENT_TYPE, mime_type)
+            .body(bytes)
+            .send()
+            .await
+            .map_err(network)?;
+        parse_remote_file(response, "files.update").await
+    }
+}
+
+#[derive(Deserialize)]
+struct VersionedEntry {
+    id: String,
+    version: String,
+}
+
+async fn parse_remote_file(
+    response: reqwest::Response,
+    api: &str,
+) -> Result<RemoteFile, DriveError> {
+    let entry: VersionedEntry = check_status(response)?
+        .json()
+        .await
+        .map_err(|e| DriveError::Internal(response_parse_error(api, e)))?;
+    Ok(RemoteFile {
+        id: checked_id(entry.id)?,
+        version: entry.version,
+    })
+}
+
+/// Drive 쿼리의 작은따옴표 문자열 안에 넣을 값.
+fn escape_query(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+/// 메타데이터와 내용을 한 요청으로 올리는 `multipart/related` 본문.
+fn multipart_related(boundary: &str, metadata: &[u8], mime_type: &str, bytes: &[u8]) -> Vec<u8> {
+    let mut body = Vec::with_capacity(metadata.len() + bytes.len() + 256);
+    body.extend_from_slice(
+        format!("--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n").as_bytes(),
+    );
+    body.extend_from_slice(metadata);
+    body.extend_from_slice(
+        format!("\r\n--{boundary}\r\nContent-Type: {mime_type}\r\n\r\n").as_bytes(),
+    );
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body
 }
 
 /// 프로젝트 ID는 Drive 폴더 이름과 쿼리 문자열에 들어가므로 안전한 문자만 허용한다.
@@ -352,7 +511,6 @@ fn network(e: reqwest::Error) -> DriveError {
     DriveError::Network(e.without_url().to_string())
 }
 
-/// `projects.tsv`의 한 줄. 구 형식 파일에서 읽은 줄은 `id`가 없다.
 #[derive(Debug, PartialEq, Eq)]
 struct ProjectRow {
     id: Option<String>,
@@ -456,7 +614,7 @@ async fn folder_name(
         .json()
         .await
         .map_err(|e| DriveError::Internal(response_parse_error("files.get", e)))?;
-    // 사용자가 Drive에서 폴더 이름을 바꿨을 수 있다. TSV를 깨뜨리는 값만 거른다.
+    // 사용자가 Drive에서 폴더 이름을 바꿨을 수 있다. CSV를 깨뜨리는 값만 거른다.
     if file.name.is_empty() || file.name.chars().any(char::is_control) {
         return Err(DriveError::Internal(
             t!("drive_error.unexpected_folder_name").into_owned(),
@@ -585,6 +743,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn escapes_query_values() {
+        assert_eq!(escape_query("o'brien@example.com"), "o\\'brien@example.com");
+        assert_eq!(escape_query("a\\b"), "a\\\\b");
+    }
+
+    #[test]
+    fn builds_multipart_related_body() {
+        let body = multipart_related("B", b"{}", "image/png", b"\x89PNG");
+        assert_eq!(
+            body,
+            b"--B\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{}\r\n--B\r\nContent-Type: image/png\r\n\r\n\x89PNG\r\n--B--\r\n"
+        );
+    }
+
     // 키가 없으면 t!는 키 문자열을 그대로 돌려주므로 실제 문구로 풀리는지 확인한다.
     #[test]
     fn error_messages_resolve_from_locale() {
@@ -594,7 +767,7 @@ mod tests {
         );
         assert_eq!(
             DriveError::InvalidProjects("x".to_owned()).to_string(),
-            "projects.tsv 형식이 잘못됐어: x"
+            "projects.csv 형식이 잘못됐어: x"
         );
     }
 }

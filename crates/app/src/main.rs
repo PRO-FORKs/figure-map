@@ -1,7 +1,10 @@
 mod auth;
 mod drive;
+mod listing;
 mod location;
 mod map;
+mod photo;
+mod sync;
 mod token_store;
 
 use dioxus::prelude::*;
@@ -96,8 +99,8 @@ fn Projects(token: auth::DriveToken, owner: String) -> Element {
     rsx! {
         if form_open() {
             CreateProjectForm {
-                token,
-                owner,
+                token: token.clone(),
+                owner: owner.clone(),
                 on_close: move |created: bool| {
                     form_open.set(false);
                     if created {
@@ -130,7 +133,12 @@ fn Projects(token: auth::DriveToken, owner: String) -> Element {
                     }
                 }
                 if let Some(drive_root) = selected() {
-                    map::CurrentLocationMap { key: "{drive_root}" }
+                    map::CurrentLocationMap {
+                        key: "{drive_root}",
+                        project_root: drive_root.clone(),
+                        owner: owner.clone(),
+                        token: token.clone(),
+                    }
                 }
             },
             Some(Err(e)) => rsx! {
